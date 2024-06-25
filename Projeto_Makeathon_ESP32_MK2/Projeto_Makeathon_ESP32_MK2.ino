@@ -299,8 +299,8 @@ void DrawLineAnimation(int start, int end, int speed) {
 }
 
 void DeDrawLineAnimation(int start, int end, int speed) {
-  for (int i = start; i < end-start; i++) {
-    DrawLine(end - i, end, BLACK);
+  for (int i = 0; i < end-start; i++) {
+    DrawLine(end, end - i, BLACK);
     delay(speed);
   }
 }
@@ -759,21 +759,15 @@ void TaskTimer(void *pvParameters) {
 
   while (1) {
 
-    Serial.print("TASK TIMER TOMA STACK: ");
-    Serial.println(uxTaskGetStackHighWaterMark(NULL));
+    if((modoDeJogo == 1) || (modoDeJogo == 2)){
 
-    if(modoDeJogo == 1){
-
-      while(modoDeJogo == 1){
+      while((modoDeJogo == 1) || (modoDeJogo == 2)){
         vTaskDelay(1);
       }
 
       timer = TIMER;
       tempoComparacao = millis();
-      escreveTimer();
-
-      DrawLineAnimation(0, 127, 1);
-      
+      escreveTimer(15);
     }
 
     if(modoDeJogo == 7) {
@@ -784,14 +778,12 @@ void TaskTimer(void *pvParameters) {
       }
 
       tempoComparacao = millis() - tempoCongelado;
+      escreveTimer(timer);
     }
 
     tempoAgora = millis();
     if ((tempoAgora - tempoComparacao) > 10000) {
       timer--;
-      ClearOLED();
-      WriteOLED(2, 0, 0, "Timer:");
-      DisplayOLED();
       BarraTimerOLED(timer);
       if (timer == -1) {
         modoDeJogo = 7;
@@ -806,18 +798,19 @@ void TaskTimer(void *pvParameters) {
     }
 
     if (timer == 0){
-      DrawLineAnimation(0, 8, 1);
-      BarraTimerOLED(timer);
+      DrawLineAnimation(0, 10, 10);
+      DeDrawLineAnimation(0, 10, 10);
     }
 
     vTaskDelay(1);
   }
 }
 
-void escreveTimer(){
+void escreveTimer(int fim){
   ClearOLED();
   WriteOLED(2, 0, 0, "Timer:");
   DisplayOLED();
+  DrawLineAnimation(0, fim*8, 1);
 }
 
 void BarraTimerOLED(int tamanhoDaBarra) {
@@ -827,9 +820,6 @@ void BarraTimerOLED(int tamanhoDaBarra) {
 void TaskPlayer(void *pvParameters) {
 
   while (1) {
-
-    Serial.print("TASK PLAYER TOMA STACK: ");
-    Serial.println(uxTaskGetStackHighWaterMark(NULL));
 
     /*
     if (modofase < 2) {  //Esperar conectar blouetooth se necessario
@@ -849,9 +839,6 @@ void TaskPlayer(void *pvParameters) {
       ClearMatrixTotal();
       MostraPlayer(GetFaseAtual(jogadorCoordenadas));
       modoDeJogo =5;
-
-      //Prepara timer
-      escreveTimer();
     }
 
     if (modoDeJogo == 5) {  // Jogo
