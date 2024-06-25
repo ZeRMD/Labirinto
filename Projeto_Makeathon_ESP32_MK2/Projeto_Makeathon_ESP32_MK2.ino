@@ -1,0 +1,1975 @@
+//*****************************************************
+//
+// Includes
+//
+//*****************************************************
+
+#include <SPI.h>
+#include <Wire.h>
+#include "Grove_LED_Matrix_Driver_HT16K33.h"
+
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+/*
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+*/
+//*****************************************************
+//
+// Define de Pins e Aderessos I2C
+//
+//*****************************************************
+
+/////////////////////////////////////////
+// BUTTONS
+
+#define BUTTON_FASE_PIN 32
+#define BUTTON_START_PIN 33
+
+/////////////////////////////////////////
+// LEDS
+#define LED_1_RED_PIN 12
+#define LED_1_GREEN_PIN 12
+#define LED_1_BLUE_PIN 12
+
+#define LED_2_RED_PIN 12
+#define LED_2_GREEN_PIN 12
+#define LED_2_BLUE_PIN 12
+
+/////////////////////////////////////////
+// Matrizes Grove de Leds Vermelhos
+#define ADDRMATRIX1 0x70
+#define ADDRMATRIX2 0x71
+#define ADDRMATRIX3 0x72
+#define ADDRMATRIX4 0x73
+
+/////////////////////////////////////////
+// The ADXL345 sensor I2C address AKA acelerometro
+#define ADXL345 0x53
+
+/////////////////////////////////////////
+// OLED
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 32  // OLED display height, in pixels
+#define OLED_RESET -1     // Reset pin # (or -1 if sharing Arduino reset pin)
+
+#define SCREEN_ADDRESS 0x3C  //See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
+
+Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+/////////////////////////////////////////
+//    LABIRINTO
+
+#define TIMER 16
+
+#define MOSTRAR_MAPA_DELAY 1000
+
+char modoDeJogo = 1;
+
+struct Coordenadas {
+  int x, y;
+};
+
+struct Fase {
+  bool fase[8][8];
+};
+
+struct Mapa {
+  Fase fases[4];
+  Coordenadas inicio, fim, chave;
+};
+
+struct Database {
+  Mapa mapas[5];
+};
+
+struct Cor {
+  int red;
+  int green;
+  int blue;
+};
+
+/////////////////////////////////////////
+//    Estruturas de Dados
+
+
+/////////////////////////////////////////
+//    Variaveis do sistema
+
+Matrix_8x8 matrix0;
+Matrix_8x8 matrix1;
+Matrix_8x8 matrix2;
+Matrix_8x8 matrix3;
+
+Mapa mapaAtual;
+int mapaAtualInt;
+
+//VARIABLES
+
+Coordenadas antigoJogadorCoordenadas;
+Coordenadas jogadorCoordenadas;
+bool playerTemChave = false;
+
+bool chaveDesenhada = true;
+
+bool conecta = false;
+bool novojogo = true;
+int modofase = 0;
+
+bool mapaCompleto[16][16];
+
+
+int ultimaInfoEnviada;
+
+// BLECharacteristic MapCharacteristic;
+bool BTT_conected = false;
+
+// COBRA
+#define QUEUESIZE 255
+
+Coordenadas frutaCoordenadas;
+
+int Rear = -1;
+int Front = -1;
+
+Coordenadas queue[QUEUESIZE];
+
+//*****************************************************
+//
+// Setup
+//
+//*****************************************************
+
+void setup() {
+
+  Serial.begin(115200);
+
+  SetupOLED();
+
+  Wire.begin();
+  SetupAcelerometro();
+
+  SetupMatrix();
+
+  SetupPins();
+
+  SetupEscolherJogo();
+}
+
+void SetupAcelerometro() {
+  Wire.beginTransmission(ADXL345);  // Start communicating with the device
+  Wire.write(0x2D);                 // Access/ talk to POWER_CTL Register - 0x2D
+  // Enable measurement
+  Wire.write(8);  // (8dec -> 0000 1000 binary) Bit D3 High for measuring enable
+  Wire.endTransmission();
+}
+
+void SetupPins() {
+  /*
+  pinMode(LED_1_RED_PIN, OUTPUT);
+  pinMode(LED_1_GREEN_PIN, OUTPUT);
+  pinMode(LED_1_BLUE_PIN, OUTPUT);
+
+  pinMode(LED_2_RED_PIN, OUTPUT);
+  pinMode(LED_2_GREEN_PIN, OUTPUT);
+  pinMode(LED_2_BLUE_PIN, OUTPUT);
+  */
+
+  pinMode(BUTTON_FASE_PIN, INPUT);
+  pinMode(BUTTON_START_PIN, INPUT);
+}
+
+void SetupEscolherJogo() {
+
+  int gameSelected;
+  bool gameSelecteddone = false;
+
+  ClearOLED();
+  WriteOLED(2, 0, 0, "Seleciona");
+  WriteOLED(2, 0, 16, "Jogo:");
+  DisplayOLED();
+
+  while (!gameSelecteddone) {
+
+    if (digitalRead(BUTTON_FASE_PIN) && gameSelected != 1) {
+
+      ClearOLED();
+      WriteOLED(2, 0, 0, "Jogo:");
+      WriteOLED(2, 0, 16, "Labirinto");
+      DisplayOLED();
+
+      gameSelected = 1;
+
+      while (digitalRead(BUTTON_FASE_PIN)) {}
+    }
+    if (digitalRead(BUTTON_FASE_PIN) && gameSelected != 2) {
+      ClearOLED();
+      WriteOLED(2, 0, 0, "Jogo:");
+      WriteOLED(2, 0, 17, "Cobra");
+      DisplayOLED();
+
+      gameSelected = 2;
+
+      while (digitalRead(BUTTON_FASE_PIN)) {}
+    }
+    if (digitalRead(BUTTON_START_PIN)) {
+
+      gameSelecteddone = true;
+
+      while (digitalRead(BUTTON_START_PIN)) {}
+    }
+  }
+
+  Serial.println("Vou alocar");
+
+  switch (gameSelected) {
+    case 1:
+      BTT_conected = true;
+
+      xTaskCreate(TaskBotao, "Buttons", 2048, NULL, 0, NULL);
+      Serial.println("Aloquei a botao");
+      
+      xTaskCreate(TaskPlayer, "Players", 2048, NULL, 0, NULL);
+      Serial.println("Aloquei a jogo");
+
+      xTaskCreate(TaskTimer, "Tempo", 2048, NULL, 0, NULL);
+      Serial.println("Aloquei a Tempo");
+
+      // xTaskCreate(TaskBTT, "BTT", 2048*5, NULL, 0, NULL);
+
+      ClearOLED();
+      WriteOLED(1, 0, 0, "Clica no botao");
+      WriteOLED(1, 0, 16, "para comecar");
+      DisplayOLED();
+
+      break;
+    case 2:
+      xTaskCreate(TaskUpdateJogoCobra, "Cobration", 2048 * 5, NULL, 0, NULL);
+      break;
+  }
+}
+
+//*****************************************************
+//
+// Loop
+//
+//*****************************************************
+
+void loop(){
+  delay(10);
+}
+
+//*****************************************************
+//
+// OLED
+//
+//*****************************************************
+
+
+void SetupOLED() {
+  // initialize the OLED object
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("SSD1306 allocation failed"));
+  } else {
+    Serial.println("OLED Inicializado com Sucesso");
+  }
+  oled.setTextColor(WHITE);
+}
+
+void ClearOLED() {
+  oled.clearDisplay();
+}
+
+void WriteOLED(int textSize, int x, int y, String text) {
+  oled.setTextSize(textSize);
+  oled.setCursor(x, y);
+  oled.println(text);
+}
+
+void DisplayOLED() {
+  oled.display();
+}
+
+void DrawLineAnimation(int start, int end, int speed) {
+  for (int i = start; i < end; i++) {
+    DrawLine(start, i, WHITE);
+    delay(speed);
+  }
+}
+
+void DeDrawLineAnimation(int start, int end, int speed) {
+  for (int i = start; i < end-start; i++) {
+    DrawLine(end - i, end, BLACK);
+    delay(speed);
+  }
+}
+
+void DrawLine(int start, int end, uint16_t color) {
+  for (int i = 18; i <= 32; i++) {
+    oled.writeLine(start, i, end, i, color);
+  }
+  DisplayOLED();
+}
+
+//*****************************************************
+//
+// Matrix
+//
+//*****************************************************
+
+void SetupMatrix() {
+  matrix0.init(ADDRMATRIX1);
+  matrix0.setBrightness(0);
+  matrix0.setBlinkRate(BLINK_OFF);
+  matrix0.setDisplayOrientation(3);
+
+  matrix1.init(ADDRMATRIX2);
+  matrix1.setBrightness(0);
+  matrix1.setBlinkRate(BLINK_OFF);
+  matrix1.setDisplayOrientation(3);
+
+  matrix2.init(ADDRMATRIX3);
+  matrix2.setBrightness(0);
+  matrix2.setBlinkRate(BLINK_OFF);
+  matrix2.setDisplayOrientation(3);
+
+  matrix3.init(ADDRMATRIX4);
+  matrix3.setBrightness(0);
+  matrix3.setBlinkRate(BLINK_OFF);
+  matrix3.setDisplayOrientation(3);
+
+  ClearMatrixTotal();
+}
+
+void DesenhaMapa(int fase, Matrix_8x8 matrixParaDesenhar) {
+  int faseDoMapa = fase;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      matrixParaDesenhar.writePixel(i, j, mapaAtual.fases[fase].fase[i][j]);
+    }
+  }
+  matrixParaDesenhar.display();
+}
+
+void DesenhaMapaInteiro() {
+  DesenhaMapa(0, matrix0);
+  DesenhaMapa(1, matrix1);
+  DesenhaMapa(2, matrix2);
+  DesenhaMapa(3, matrix3);
+}
+
+void ClearMatrix(Matrix_8x8 matrix) {
+  matrix.clear();
+  matrix.display();
+}
+
+void ClearMatrixTotal() {
+  ClearMatrix(matrix0);
+  ClearMatrix(matrix1);
+  ClearMatrix(matrix2);
+  ClearMatrix(matrix3);
+}
+
+//*****************************************************
+//
+// LEDS
+//
+//*****************************************************
+
+void setColor(char* hexCor, int LED) {
+
+  Cor cor;
+  cor = hexParaInteiro(hexCor);
+
+  switch(LED){
+    case 1: 
+      analogWrite(LED_1_RED_PIN, cor.red);
+      analogWrite(LED_1_GREEN_PIN,  cor.green);
+      analogWrite(LED_1_BLUE_PIN, cor.blue);
+      break;
+    case 2: 
+      analogWrite(LED_2_RED_PIN, cor.red);
+      analogWrite(LED_2_GREEN_PIN,  cor.green);
+      analogWrite(LED_2_BLUE_PIN, cor.blue);
+      break;
+  }
+}
+
+Cor hexParaInteiro(char* hexString) {
+  
+  Cor cor;
+
+  cor.red = hexCharToDec(hexString[0] * 16) + hexCharToDec(hexString[1]);
+  cor.green = hexCharToDec(hexString[2] * 16) + hexCharToDec(hexString[3]);
+  cor.blue = hexCharToDec(hexString[4] * 16) + hexCharToDec(hexString[5]);
+
+  return cor;
+
+}
+
+int hexCharToDec(char hexChar) {
+  if (hexChar >= '0' && hexChar <= '9') {
+    return hexChar - '0';
+  } else if (hexChar >= 'a' && hexChar <= 'f') {
+    return 10 + (hexChar - 'a');
+  } else if (hexChar >= 'A' && hexChar <= 'F') {
+    return 10 + (hexChar - 'A');
+  } else {
+    return -1;
+  }
+}
+
+void FlashLed(char* hexCor, int LED) {
+
+  Cor corEscrever;
+
+  Cor corEntrada;
+  corEntrada = hexParaInteiro(hexCor);
+
+  switch(LED) {
+    case 1:
+      for (int fadeValue = 0; fadeValue < 250; fadeValue += 5) {
+
+      corEscrever = trataCoresFlash(corEntrada, fadeValue);
+
+      analogWrite(LED_1_RED_PIN, corEscrever.red);
+      analogWrite(LED_1_GREEN_PIN,  corEscrever.green);
+      analogWrite(LED_1_BLUE_PIN, corEscrever.blue);
+
+      delay(3);
+    }
+
+    case 2:
+      for (int fadeValue = 0; fadeValue < 250; fadeValue += 5) {
+
+      corEscrever = trataCoresFlash(corEntrada, fadeValue);
+
+      analogWrite(LED_2_RED_PIN, corEscrever.red);
+      analogWrite(LED_2_GREEN_PIN,  corEscrever.green);
+      analogWrite(LED_2_BLUE_PIN, corEscrever.blue);
+
+      delay(3);
+    }
+  }
+  
+}
+
+Cor trataCoresFlash(Cor corEntrada, int fadevalue){
+  int ajudaRED;
+  int ajudaGREEN;
+  int ajudaBLUE;
+
+  ajudaRED = corEntrada.red - fadevalue;
+  ajudaGREEN = corEntrada.green - fadevalue;
+  ajudaBLUE = corEntrada.blue - fadevalue;
+
+  Cor corSaida;
+
+  if(ajudaRED < 0){
+    corSaida.red = 0;
+  } else {
+    corSaida.red = ajudaRED;
+  }
+
+  if(ajudaGREEN < 0){
+    corSaida.green = 0;
+  } else {
+    corSaida.green = ajudaGREEN;
+  }
+
+  if(ajudaBLUE < 0){
+    corSaida.blue = 0;
+  } else {
+    corSaida.blue = ajudaBLUE;
+  }
+
+  return corSaida;
+
+}
+
+//*****************************************************
+//
+// Jogo do labirinto
+//
+//*****************************************************
+
+///////////////////////////////////////////////////////
+// mode = 1 default
+// mode = 2 modepicker
+// mode = 3 setup comeco de jogo
+// mode = 4 retomar jogo
+// mode = 5 jogo
+// mode = 6 mostrar mapa durante o jogo
+// mode = 7 stop jogo
+///////////////////////////////////////////////////////
+/*
+void TaskBTT(void *pvParameters) {
+  BLE.begin();
+  while (1) {
+    if (conecta) {
+      // start scanning for peripherals
+      BLE.scanForUuid("19B10010-E8F2-537E-4F6C-D104768A1214");
+      BLEDevice peripheral = BLE.available();
+      Serial.print("Tentar ");
+      if (peripheral) {
+        // discovered a peripheral, print out address, local name, and advertised service
+        Serial.print("Found ");
+        Serial.print(peripheral.address());
+        Serial.print(" '");
+        Serial.print(peripheral.localName());
+        Serial.print("' ");
+        Serial.print(peripheral.advertisedServiceUuid());
+        Serial.println();
+
+        if (peripheral.localName() == "Mapa") {
+          BLE.stopScan();
+        }
+
+        controlMap(peripheral);
+      }
+    }
+    vTaskDelay(1);
+  }
+}
+
+void controlMap(BLEDevice peripheral) {
+
+  if (peripheral.connect()) {
+    Serial.println("Connected");
+  } else {
+    Serial.println("Failed to connect!");
+    return;
+  }
+
+  // discover peripheral attributes
+  Serial.println("Discovering attributes ...");
+  if (peripheral.discoverAttributes()) {
+    Serial.println("Attributes discovered");
+  } else {
+    Serial.println("Attribute discovery failed!");
+    peripheral.disconnect();
+    return;
+  }
+
+  // retrieve the LED characteristic
+  MapCharacteristic = peripheral.characteristic("19B10011-E8F2-537E-4F6C-D104768A1214");
+
+  if (!MapCharacteristic) {
+    Serial.println("Peripheral does not have Map characteristic!");
+    peripheral.disconnect();
+    return;
+  } else if (!MapCharacteristic.canWrite()) {
+    Serial.println("Peripheral does not have a writable Map characteristic!");
+    peripheral.disconnect();
+    return;
+  }
+
+  BTT_conected = true;
+  if (modofase < 2) {
+    MapCharacteristic.writeValue((byte)mapaAtualInt);
+    switch (modofase) {
+      case 0:
+        MapCharacteristic.writeValue((byte)10);
+        break;
+      case 1:
+        MapCharacteristic.writeValue((byte)9);
+        break;
+    }
+  }
+
+
+  while (peripheral.connected()) {
+    vTaskDelay(1);
+  }
+  BTT_conected = false;
+
+  //MapCharacteristic.writeValue((byte)0x01);
+  //Funcao que manda
+
+  Serial.println("Peripheral disconnected");
+}*/
+
+void TaskBotao(void *pvParameters) {
+  while (1) {
+
+    if (digitalRead(BUTTON_FASE_PIN)) {
+      BotaoFaseLabirinto();
+    }
+
+    if (digitalRead(BUTTON_START_PIN)) {
+      BotaoJogoLabirinto();
+    }
+
+    vTaskDelay(1);
+  }
+}
+
+void BotaoJogoLabirinto() {
+
+  if (modoDeJogo == 2) {  // Sair do modo de escolher modo de jogo se estiver la dentro
+
+    ClearOLED();
+    WriteOLED(2, 0, 0, "Clica no botao");
+    WriteOLED(2, 0, 16, "para comecar");
+    DisplayOLED();
+
+    modoDeJogo = 1;
+  }
+
+  if (modoDeJogo == 1) {  // Se estamos no modo default entao vamos comecar o jogo
+
+    AtribuiMapaAleatorio();
+    jogadorCoordenadas = mapaAtual.inicio;
+    conecta = true;
+
+    ClearOLED();
+    WriteOLED(2, 0, 0, "Em 5");
+    WriteOLED(2, 0, 16, "Prepara-te!");
+    DisplayOLED();
+    vTaskDelay(1000);
+    ClearOLED();
+    WriteOLED(2, 0, 0, "Em 4");
+    WriteOLED(2, 0, 16, "Prepara-te!");
+    DisplayOLED();
+    vTaskDelay(1000);
+    ClearOLED();
+    WriteOLED(2, 0, 0, "Em 3");
+    WriteOLED(2, 0, 16, "Prepara-te!");
+    DisplayOLED();
+    vTaskDelay(1000);
+    ClearOLED();
+    WriteOLED(2, 0, 0, "Em 2");
+    WriteOLED(2, 0, 16, "Prepara-te!");
+    DisplayOLED();
+    vTaskDelay(1000);
+    ClearOLED();
+    WriteOLED(2, 0, 0, "Em 1");
+    WriteOLED(2, 0, 16, "Prepara-te!");
+    DisplayOLED();
+    vTaskDelay(1000);
+    ClearOLED();
+    WriteOLED(2, 0, 0, "COMECA!!!!");
+    DisplayOLED();
+    vTaskDelay(1000);
+    ClearOLED();
+    modoDeJogo = 3;
+    //Mostrar algo no LCD
+    //Comecar countdown e comecar timer
+  }
+
+  if ((modoDeJogo == 5) && (modofase > 1)) {  // Se o modo for singleplayer (modofase > 1) e o jogo tiver comecado ent vamos mostrar o mapa
+    modoDeJogo = 6;                           // parar acelerometro de andar (taskjogador) aka modo mostrar mapa
+
+    MostraMapaPeriodo(MOSTRAR_MAPA_DELAY);
+
+    modoDeJogo = 4;
+  }
+
+  while (digitalRead(BUTTON_START_PIN)) {
+  }
+}
+
+void MostraMapaPeriodo(int tempoMapa) {
+
+  ClearMatrixTotal();
+
+  if (modofase == 2) {  //se for o modo normal é so mostrar tudo
+    DesenhaMapaInteiro();
+  } else {  // se for o modo fases mostramos apenas a fase onde o jogador está
+    switch (GetFaseAtual(jogadorCoordenadas)) {
+      case 0:
+        DesenhaMapa(0, matrix0);
+        break;
+      case 1:
+        DesenhaMapa(1, matrix1);
+        break;
+      case 2:
+        DesenhaMapa(2, matrix2);
+        break;
+      case 3:
+        DesenhaMapa(3, matrix3);
+        break;
+    }
+  }
+
+  vTaskDelay(tempoMapa);  //mostrar mapa por 1000 segundos
+}
+
+void BotaoFaseLabirinto() {
+
+  if (modoDeJogo == 2) {
+    EscolheModoLabirinto();
+  }
+
+  if (modoDeJogo == 1) {
+
+    ClearOLED();
+    WriteOLED(2, 0, 0, "Selecionar modo");
+    DisplayOLED();
+
+    modoDeJogo = 2;
+  }
+
+  while (digitalRead(BUTTON_FASE_PIN)) {
+  }
+}
+
+void EscolheModoLabirinto() {
+  modofase++;
+
+  if (modofase == 4) {
+    modofase = 0;
+  }
+
+  switch (modofase) {
+    case 0:
+      ClearOLED();
+      WriteOLED(2, 0, 0, "Modo Normal");
+      WriteOLED(2, 0, 16, "Multiplayer");
+      DisplayOLED();
+      break;
+    case 1:
+      ClearOLED();
+      WriteOLED(2, 0, 0, "Modo Fases");
+      WriteOLED(2, 0, 16, "Multiplayer");
+      DisplayOLED();
+      break;
+    case 2:
+      ClearOLED();
+      WriteOLED(2, 0, 0, "Modo Normal");
+      WriteOLED(2, 0, 16, "Singleplayer");
+      DisplayOLED();
+      break;
+    case 3:
+      ClearOLED();
+      WriteOLED(2, 0, 0, "Modo Fases");
+      WriteOLED(2, 0, 16, "Singleplayer");
+      DisplayOLED();
+      break;
+  }
+}
+
+void TaskTimer(void *pvParameters) {
+  int tempoAgora;
+  int tempoComparacao;
+  int timer;
+
+  int tempoCongelado;
+
+  while (1) {
+
+    Serial.print("TASK TIMER TOMA STACK: ");
+    Serial.println(uxTaskGetStackHighWaterMark(NULL));
+
+    if(modoDeJogo == 1){
+
+      while(modoDeJogo == 1){
+        vTaskDelay(1);
+      }
+
+      timer = TIMER;
+      tempoComparacao = millis();
+      escreveTimer();
+
+      DrawLineAnimation(0, 127, 1);
+      
+    }
+
+    if(modoDeJogo == 7) {
+      tempoCongelado = tempoComparacao - millis();
+
+      while(modoDeJogo == 7){
+        vTaskDelay(1);
+      }
+
+      tempoComparacao = millis() - tempoCongelado;
+    }
+
+    tempoAgora = millis();
+    if ((tempoAgora - tempoComparacao) > 10000) {
+      timer--;
+      ClearOLED();
+      WriteOLED(2, 0, 0, "Timer:");
+      DisplayOLED();
+      BarraTimerOLED(timer);
+      if (timer == -1) {
+        modoDeJogo = 7;
+        ClearOLED();
+        WriteOLED(2, 0, 0, "PERDESTE :(");
+        DisplayOLED();
+        vTaskDelay(5000);
+        modoDeJogo = 1;
+      }
+      
+      tempoComparacao = tempoAgora;
+    }
+
+    if (timer == 0){
+      DrawLineAnimation(0, 8, 1);
+      BarraTimerOLED(timer);
+    }
+
+    vTaskDelay(1);
+  }
+}
+
+void escreveTimer(){
+  ClearOLED();
+  WriteOLED(2, 0, 0, "Timer:");
+  DisplayOLED();
+}
+
+void BarraTimerOLED(int tamanhoDaBarra) {
+  DeDrawLineAnimation(tamanhoDaBarra * 8, (tamanhoDaBarra + 1) * 8, 1);
+}
+
+void TaskPlayer(void *pvParameters) {
+
+  while (1) {
+
+    Serial.print("TASK PLAYER TOMA STACK: ");
+    Serial.println(uxTaskGetStackHighWaterMark(NULL));
+
+    /*
+    if (modofase < 2) {  //Esperar conectar blouetooth se necessario
+      while (!BTT_conected) {
+        vTaskDelay(10);
+      }
+    }
+    */
+
+    if (modoDeJogo == 3) {  // Setup jogo
+      ClearMatrixTotal();
+      MostraPlayer(GetFaseAtual(jogadorCoordenadas));
+      modoDeJogo = 5;
+    }
+
+    if (modoDeJogo == 4) {  // Retomar ao jogo
+      ClearMatrixTotal();
+      MostraPlayer(GetFaseAtual(jogadorCoordenadas));
+      modoDeJogo =5;
+
+      //Prepara timer
+      escreveTimer();
+    }
+
+    if (modoDeJogo == 5) {  // Jogo
+      //Jogo
+      int val = TrataFisicas();
+      if (val == 0) {
+        MostraPlayer(GetFaseAtual(jogadorCoordenadas));
+      }
+    }
+    vTaskDelay(1);
+  }
+}
+
+int TrataFisicas() {
+  float X_out, Y_out, Z_out;  // Outputs
+
+  Wire.beginTransmission(ADXL345);
+  Wire.write(0x32);  // Start with register 0x32 (ACCEL_XOUT_H)
+  Wire.endTransmission(false);
+  Wire.requestFrom(ADXL345, 6, true);  // Read 6 registers total, each axis value is stored in 2 registers
+
+  X_out = (Wire.read() | Wire.read() << 8);  // X-axis value
+  X_out = X_out / 256;                       //For a range of +-2g, we need to divide the raw values by 256, according to the datasheet
+  Y_out = (Wire.read() | Wire.read() << 8);  // Y-axis value
+  Y_out = Y_out / 256;
+  Z_out = (Wire.read() | Wire.read() << 8);  // Z-axis value
+  Z_out = Z_out / 256;
+
+  if (X_out < 255.6 && X_out > 2) {
+    return MovePlayer(0);  //DIREITA
+  } else if (X_out > 0.4 && X_out < 2) {
+    return MovePlayer(1);  //ESQUERDA
+  }
+  if (Y_out < 255.6 && Y_out > 2) {
+    return MovePlayer(2);  //CIMA
+  } else if (Y_out > 0.4 && Y_out < 2) {
+    return MovePlayer(3);  //BAIXO
+  }
+  return -1;
+}
+
+int GetFaseAtual(Coordenadas coord) {
+  int fase = -1;
+  if (coord.x < 8 && coord.y < 8) {
+    fase = 0;
+  } else if (coord.x < 8 && coord.y >= 8) {
+    fase = 3;
+  } else if (coord.x >= 8 && coord.y >= 8) {
+    fase = 2;
+  } else if (coord.x >= 8 && coord.y < 8) {
+    fase = 1;
+  }
+  return fase;
+}
+
+void MostraPlayer(int faseAtual) {
+  //Chave
+  if (!playerTemChave) {
+    int fase = GetFaseAtual(mapaAtual.chave);
+
+    int chaveX = mapaAtual.chave.x;
+    int chaveY = mapaAtual.chave.y;
+
+    if (chaveX >= 8) {
+      chaveX -= 8;
+    }
+
+    if (chaveY >= 8) {
+      chaveY -= 8;
+    }
+
+    switch (fase) {
+      case 0:
+        matrix0.writePixel(chaveX, chaveY);
+        matrix0.writePixel(chaveX + 1, chaveY);
+        matrix0.writePixel(chaveX - 1, chaveY);
+        matrix0.writePixel(chaveX, chaveY + 1);
+        matrix0.writePixel(chaveX, chaveY - 1);
+        matrix0.display();
+        break;
+      case 1:
+        matrix1.writePixel(chaveX, chaveY);
+        matrix1.writePixel(chaveX + 1, chaveY);
+        matrix1.writePixel(chaveX - 1, chaveY);
+        matrix1.writePixel(chaveX, chaveY + 1);
+        matrix1.writePixel(chaveX, chaveY - 1);
+        matrix1.display();
+        break;
+      case 2:
+        matrix2.writePixel(chaveX, chaveY);
+        matrix2.writePixel(chaveX + 1, chaveY);
+        matrix2.writePixel(chaveX - 1, chaveY);
+        matrix2.writePixel(chaveX, chaveY + 1);
+        matrix2.writePixel(chaveX, chaveY - 1);
+        matrix2.display();
+        break;
+      case 3:
+        matrix3.writePixel(chaveX, chaveY);
+        matrix3.writePixel(chaveX + 1, chaveY);
+        matrix3.writePixel(chaveX - 1, chaveY);
+        matrix3.writePixel(chaveX, chaveY + 1);
+        matrix3.writePixel(chaveX, chaveY - 1);
+        matrix3.display();
+        break;
+    }
+  } else {
+    if (chaveDesenhada) {
+      int fase = GetFaseAtual(mapaAtual.chave);
+
+      int chaveX = mapaAtual.chave.x;
+      int chaveY = mapaAtual.chave.y;
+
+      if (chaveX >= 8) {
+        chaveX -= 8;
+      }
+
+      if (chaveY >= 8) {
+        chaveY -= 8;
+      }
+
+      switch (fase) {
+        case 0:
+          matrix0.writePixel(chaveX, chaveY, false);
+          matrix0.writePixel(chaveX + 1, chaveY, false);
+          matrix0.writePixel(chaveX - 1, chaveY, false);
+          matrix0.writePixel(chaveX, chaveY + 1, false);
+          matrix0.writePixel(chaveX, chaveY - 1, false);
+          matrix0.display();
+          break;
+        case 1:
+          matrix1.writePixel(chaveX, chaveY, false);
+          matrix1.writePixel(chaveX + 1, chaveY, false);
+          matrix1.writePixel(chaveX - 1, chaveY, false);
+          matrix1.writePixel(chaveX, chaveY + 1, false);
+          matrix1.writePixel(chaveX, chaveY - 1, false);
+          matrix1.display();
+          break;
+        case 2:
+          matrix2.writePixel(chaveX, chaveY, false);
+          matrix2.writePixel(chaveX + 1, chaveY, false);
+          matrix2.writePixel(chaveX - 1, chaveY, false);
+          matrix2.writePixel(chaveX, chaveY + 1, false);
+          matrix2.writePixel(chaveX, chaveY - 1, false);
+          matrix2.display();
+          break;
+        case 3:
+          matrix3.writePixel(chaveX, chaveY, false);
+          matrix3.writePixel(chaveX + 1, chaveY, false);
+          matrix3.writePixel(chaveX - 1, chaveY, false);
+          matrix3.writePixel(chaveX, chaveY + 1, false);
+          matrix3.writePixel(chaveX, chaveY - 1, false);
+          matrix3.display();
+          break;
+      }
+    }
+    //saida
+
+    int fase = GetFaseAtual(mapaAtual.fim);
+    int saidaX = mapaAtual.fim.x;
+    int saidaY = mapaAtual.fim.y;
+    if (saidaX >= 8) {
+      saidaX -= 8;
+    }
+
+    if (saidaY >= 8) {
+      saidaY -= 8;
+    }
+    switch (fase) {
+      case 0:
+        matrix0.writePixel(saidaX, saidaY);
+        matrix0.writePixel(saidaX + 1, saidaY + 1);
+        matrix0.writePixel(saidaX - 1, saidaY + 1);
+        matrix0.writePixel(saidaX - 1, saidaY - 1);
+        matrix0.writePixel(saidaX + 1, saidaY - 1);
+        matrix0.display();
+        break;
+      case 1:
+        matrix1.writePixel(saidaX, saidaY);
+        matrix1.writePixel(saidaX + 1, saidaY + 1);
+        matrix1.writePixel(saidaX - 1, saidaY + 1);
+        matrix1.writePixel(saidaX - 1, saidaY - 1);
+        matrix1.writePixel(saidaX + 1, saidaY - 1);
+        matrix1.display();
+        break;
+      case 2:
+        matrix2.writePixel(saidaX, saidaY);
+        matrix2.writePixel(saidaX + 1, saidaY + 1);
+        matrix2.writePixel(saidaX - 1, saidaY + 1);
+        matrix2.writePixel(saidaX - 1, saidaY - 1);
+        matrix2.writePixel(saidaX + 1, saidaY - 1);
+        matrix2.display();
+        break;
+      case 3:
+        matrix3.writePixel(saidaX, saidaY);
+        matrix3.writePixel(saidaX + 1, saidaY + 1);
+        matrix3.writePixel(saidaX - 1, saidaY + 1);
+        matrix3.writePixel(saidaX - 1, saidaY - 1);
+        matrix3.writePixel(saidaX + 1, saidaY - 1);
+        matrix3.display();
+        break;
+    }
+  }
+  int x = jogadorCoordenadas.x;
+  int y = jogadorCoordenadas.y;
+
+  if (x >= 8) {
+    x -= 8;
+  }
+
+  if (y >= 8) {
+    y -= 8;
+  }
+  switch (faseAtual) {
+    case 0:
+      matrix0.writePixel(x, y, true);
+      matrix0.display();
+      if (ultimaInfoEnviada != 0 && (modofase < 2)) {
+        //MapCharacteristic.writeValue((byte)0);
+        ultimaInfoEnviada = 0;
+      }
+      break;
+    case 1:
+      matrix1.writePixel(x, y, true);
+      matrix1.display();
+      if (ultimaInfoEnviada != 1 && (modofase < 2)) {
+        //MapCharacteristic.writeValue((byte)1);
+        ultimaInfoEnviada = 1;
+      }
+      break;
+    case 2:
+      matrix2.writePixel(x, y, true);
+      matrix2.display();
+      if (ultimaInfoEnviada != 2 && (modofase < 2)) {
+        //MapCharacteristic.writeValue((byte)2);
+        ultimaInfoEnviada = 2;
+      }
+      break;
+    case 3:
+      matrix3.writePixel(x, y, true);
+      matrix3.display();
+      if (ultimaInfoEnviada != 3 && (modofase < 2)) {
+        //MapCharacteristic.writeValue((byte)3);
+        ultimaInfoEnviada = 3;
+      }
+      break;
+  }
+
+  if (antigoJogadorCoordenadas.x == jogadorCoordenadas.x && antigoJogadorCoordenadas.y == jogadorCoordenadas.y)
+    return;
+
+  x = antigoJogadorCoordenadas.x;
+  y = antigoJogadorCoordenadas.y;
+  if (x >= 8) {
+    x -= 8;
+  }
+
+  if (y >= 8) {
+    y -= 8;
+  }
+  int faseAnterior = GetFaseAtual(antigoJogadorCoordenadas);
+  switch (faseAnterior) {
+    case 0:
+      matrix0.writePixel(x, y, false);
+      matrix0.display();
+      break;
+    case 1:
+      matrix1.writePixel(x, y, false);
+      matrix1.display();
+      break;
+    case 2:
+      matrix2.writePixel(x, y, false);
+      matrix2.display();
+      break;
+    case 3:
+      matrix3.writePixel(x, y, false);
+      matrix3.display();
+      break;
+  }
+}
+
+int MovePlayer(int direction) {
+  bool posicaoFutura;
+  antigoJogadorCoordenadas.x = jogadorCoordenadas.x;
+  antigoJogadorCoordenadas.y = jogadorCoordenadas.y;
+  switch (direction) {
+    case 0:
+      posicaoFutura = mapaCompleto[jogadorCoordenadas.x][jogadorCoordenadas.y + 1];
+      if (jogadorCoordenadas.y >= 15 || posicaoFutura) {
+        //////////////////////////////////////
+        //FlashLedVermelho();
+        return -1;
+      }
+      jogadorCoordenadas.y++;
+      break;
+    case 1:
+      posicaoFutura = mapaCompleto[jogadorCoordenadas.x][jogadorCoordenadas.y - 1];
+      if (jogadorCoordenadas.y <= 0 || posicaoFutura) {
+        //////////////////////////////////////
+        //FlashLedVermelho();
+        return -1;
+      }
+      jogadorCoordenadas.y--;
+      break;
+    case 2:
+      posicaoFutura = mapaCompleto[jogadorCoordenadas.x - 1][jogadorCoordenadas.y];
+      if (jogadorCoordenadas.x <= 0 || posicaoFutura) {
+        //////////////////////////////////////
+        //FlashLedVermelho();
+        return -1;
+      }
+      jogadorCoordenadas.x--;
+      break;
+    case 3:
+      posicaoFutura = mapaCompleto[jogadorCoordenadas.x + 1][jogadorCoordenadas.y];
+      if (jogadorCoordenadas.x >= 15 || posicaoFutura) {
+        //////////////////////////////////////
+        //FlashLedVermelho();
+        return -1;
+      }
+      jogadorCoordenadas.x++;
+      break;
+  }
+  if (jogadorCoordenadas.x == mapaAtual.chave.x && jogadorCoordenadas.y == mapaAtual.chave.y) {
+    playerTemChave = true;
+    //////////////////////////////////////
+    //digitalWrite(GREEN_LED_PIN, HIGH);
+  }
+  if (jogadorCoordenadas.x == mapaAtual.fim.x && jogadorCoordenadas.y == mapaAtual.fim.y && playerTemChave) {
+    //GANHOU
+    modoDeJogo = 7;
+    ClearOLED();
+    WriteOLED(2,0,0,"GANHASTE!");
+    DisplayOLED();
+    if (modofase < 2) {
+      //MapCharacteristic.writeValue((byte)11);
+    }
+    DesenhaMapaInteiro();
+    delay(MOSTRAR_MAPA_DELAY);
+    ClearMatrixTotal();
+    delay(MOSTRAR_MAPA_DELAY);
+    DesenhaMapaInteiro();
+    delay(MOSTRAR_MAPA_DELAY);
+    ClearMatrixTotal();
+    //ESP.restart();
+    modoDeJogo = 1;
+  }
+  return 0;
+}
+
+void AtribuiMapaAleatorio() {
+  randomSeed(millis());
+  switch (random(1, 6)) {
+    case 1:
+      AtribuiMapa1();
+      break;
+    case 2:
+      AtribuiMapa2();
+      break;
+    case 3:
+      AtribuiMapa3();
+      break;
+    case 4:
+      AtribuiMapa4();
+      break;
+    case 5:
+      AtribuiMapa5();
+      break;
+  }
+}
+
+void AtribuiMapa1() {
+  mapaAtualInt = 4;
+  bool mapa1fase1[8][8] = {
+    { 0, 1, 0, 0, 0, 1, 1, 1 },
+    { 0, 1, 1, 1, 0, 0, 0, 0 },
+    { 0, 0, 0, 0, 0, 1, 1, 0 },
+    { 1, 0, 1, 0, 0, 0, 0, 0 },
+    { 0, 0, 1, 1, 1, 0, 1, 0 },
+    { 1, 0, 1, 0, 0, 0, 1, 1 },
+    { 1, 0, 1, 0, 1, 0, 0, 0 },
+    { 1, 0, 1, 0, 1, 1, 1, 1 }
+  };
+
+  Fase fase1;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase1.fase[i][j] = mapa1fase1[i][j];
+    }
+  }
+
+  bool mapa1fase2[8][8] = {
+    { 1, 0, 1, 0, 0, 0, 0, 1 },
+    { 1, 0, 1, 1, 1, 1, 0, 1 },
+    { 1, 0, 0, 0, 0, 1, 1, 1 },
+    { 1, 0, 0, 1, 0, 1, 0, 0 },
+    { 1, 0, 1, 1, 0, 0, 0, 0 },
+    { 0, 0, 0, 1, 1, 1, 1, 1 },
+    { 1, 1, 0, 0, 0, 0, 0, 0 },
+    { 0, 0, 0, 1, 1, 1, 1, 1 }
+  };
+
+  Fase fase2;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase2.fase[i][j] = mapa1fase2[i][j];
+    }
+  }
+
+  bool mapa1fase3[8][8] = {
+    { 1, 1, 0, 0, 0, 1, 0, 0 },
+    { 0, 0, 0, 1, 1, 1, 0, 1 },
+    { 0, 1, 0, 0, 0, 1, 0, 1 },
+    { 0, 1, 1, 1, 1, 1, 0, 1 },
+    { 1, 0, 0, 0, 0, 0, 0, 0 },
+    { 1, 0, 1, 1, 0, 1, 1, 1 },
+    { 0, 1, 1, 1, 0, 0, 1, 0 },
+    { 0, 0, 0, 1, 1, 0, 0, 0 }
+  };
+
+  Fase fase3;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase3.fase[i][j] = mapa1fase3[i][j];
+    }
+  }
+
+  bool mapa1fase4[8][8] = {
+    { 1, 1, 1, 0, 0, 0, 1, 0 },
+    { 0, 0, 1, 0, 1, 0, 1, 0 },
+    { 1, 0, 1, 1, 1, 0, 0, 0 },
+    { 1, 0, 0, 0, 0, 0, 1, 1 },
+    { 0, 1, 1, 1, 0, 1, 0, 0 },
+    { 0, 1, 0, 1, 0, 1, 1, 1 },
+    { 0, 1, 0, 1, 0, 0, 0, 0 },
+    { 0, 1, 0, 1, 0, 1, 1, 0 }
+  };
+
+  Fase fase4;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase4.fase[i][j] = mapa1fase4[i][j];
+    }
+  }
+  Coordenadas inicioVector2;
+  inicioVector2.x = 2;
+  inicioVector2.y = 1;
+
+  Coordenadas chaveVector2;
+  chaveVector2.x = 9;
+  chaveVector2.y = 14;
+
+  Coordenadas fimVector2;
+  fimVector2.x = 11;
+  fimVector2.y = 1;
+
+  mapaAtual.fases[0] = fase1;
+  mapaAtual.fases[1] = fase2;
+  mapaAtual.fases[2] = fase3;
+  mapaAtual.fases[3] = fase4;
+
+  mapaAtual.inicio = inicioVector2;
+  mapaAtual.chave = chaveVector2;
+  mapaAtual.fim = fimVector2;
+
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      mapaCompleto[i][j] = mapa1fase1[i][j];
+      mapaCompleto[i + 8][j] = mapa1fase2[i][j];
+      mapaCompleto[i + 8][j + 8] = mapa1fase3[i][j];
+      mapaCompleto[i][j + 8] = mapa1fase4[i][j];
+    }
+  }
+  Serial.println("MAPA COMPLETO:");
+  for (int i = 0; i < 16; i++) {
+    for (int j = 0; j < 16; j++) {
+      Serial.print(mapaCompleto[i][j]);
+    }
+    Serial.println();
+  }
+}
+
+void AtribuiMapa2() {
+  mapaAtualInt = 5;
+  bool mapa2fase1[8][8] = {
+    { 0, 0, 0, 1, 0, 0, 0, 0 },
+    { 1, 1, 0, 1, 1, 0, 1, 1 },
+    { 0, 1, 0, 0, 1, 0, 1, 0 },
+    { 0, 1, 0, 1, 1, 1, 0, 0 },
+    { 0, 1, 0, 0, 0, 0, 1, 0 },
+    { 0, 0, 0, 1, 1, 0, 1, 0 },
+    { 0, 0, 1, 0, 0, 0, 1, 1 },
+    { 0, 1, 1, 0, 1, 1, 0, 1 }
+  };
+
+  Fase fase1;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase1.fase[i][j] = mapa2fase1[i][j];
+    }
+  }
+
+  bool mapa2fase2[8][8] = {
+    { 0, 1, 0, 1, 0, 1, 0, 1 },
+    { 0, 1, 0, 1, 0, 1, 0, 0 },
+    { 0, 1, 0, 1, 0, 1, 0, 1 },
+    { 0, 0, 0, 0, 0, 1, 1, 1 },
+    { 1, 0, 1, 0, 0, 0, 0, 0 },
+    { 0, 0, 1, 1, 1, 0, 0, 0 },
+    { 1, 0, 0, 0, 0, 1, 1, 1 },
+    { 1, 1, 0, 1, 0, 0, 0, 0 }
+  };
+
+  Fase fase2;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase2.fase[i][j] = mapa2fase2[i][j];
+    }
+  }
+
+  bool mapa2fase3[8][8] = {
+    { 0, 1, 1, 0, 0, 1, 1, 0 },
+    { 0, 0, 1, 1, 0, 0, 1, 0 },
+    { 1, 0, 0, 1, 1, 0, 1, 0 },
+    { 0, 0, 0, 0, 0, 0, 1, 0 },
+    { 0, 1, 0, 0, 1, 0, 1, 0 },
+    { 0, 1, 1, 1, 1, 1, 0, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 1 },
+    { 1, 1, 1, 1, 1, 1, 1, 1 }
+  };
+
+  Fase fase3;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase3.fase[i][j] = mapa2fase3[i][j];
+    }
+  }
+
+  bool mapa2fase4[8][8] = {
+    { 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 1, 1, 1, 1, 1, 1, 1, 0 },
+    { 1, 1, 0, 0, 0, 0, 1, 0 },
+    { 1, 0, 0, 1, 1, 0, 1, 0 },
+    { 1, 0, 1, 0, 1, 0, 1, 0 },
+    { 0, 1, 0, 0, 0, 0, 1, 0 },
+    { 0, 1, 0, 1, 0, 1, 1, 0 },
+    { 0, 1, 0, 0, 1, 0, 0, 0 }
+  };
+
+  Fase fase4;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase4.fase[i][j] = mapa2fase4[i][j];
+    }
+  }
+  Coordenadas inicioVector2;
+  inicioVector2.x = 15;
+  inicioVector2.y = 2;
+
+  Coordenadas chaveVector2;
+  chaveVector2.x = 2;
+  chaveVector2.y = 3;
+
+  Coordenadas fimVector2;
+  fimVector2.x = 2;
+  fimVector2.y = 13;
+
+  mapaAtual.fases[0] = fase1;
+  mapaAtual.fases[1] = fase2;
+  mapaAtual.fases[2] = fase3;
+  mapaAtual.fases[3] = fase4;
+
+  mapaAtual.inicio = inicioVector2;
+  mapaAtual.chave = chaveVector2;
+  mapaAtual.fim = fimVector2;
+
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      mapaCompleto[i][j] = mapa2fase1[i][j];
+      mapaCompleto[i + 8][j] = mapa2fase2[i][j];
+      mapaCompleto[i + 8][j + 8] = mapa2fase3[i][j];
+      mapaCompleto[i][j + 8] = mapa2fase4[i][j];
+    }
+  }
+}
+
+void AtribuiMapa3() {
+  mapaAtualInt = 6;
+  bool mapa3fase1[8][8] = {
+    { 0, 0, 1, 1, 0, 1, 0, 0 },
+    { 0, 1, 1, 0, 0, 0, 1, 1 },
+    { 0, 1, 0, 0, 1, 0, 0, 1 },
+    { 0, 0, 0, 1, 1, 0, 1, 1 },
+    { 1, 1, 1, 0, 0, 0, 1, 0 },
+    { 1, 0, 1, 1, 0, 1, 1, 0 },
+    { 1, 0, 1, 0, 0, 1, 0, 1 },
+    { 1, 0, 0, 1, 0, 0, 0, 1 }
+  };
+
+  Fase fase1;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase1.fase[i][j] = mapa3fase1[i][j];
+    }
+  }
+
+  bool mapa3fase2[8][8] = {
+    { 1, 0, 1, 1, 0, 0, 1, 0 },
+    { 0, 0, 1, 0, 0, 1, 1, 1 },
+    { 1, 0, 1, 0, 1, 1, 1, 1 },
+    { 1, 0, 1, 0, 0, 0, 1, 0 },
+    { 1, 0, 1, 0, 1, 1, 0, 1 },
+    { 0, 0, 0, 0, 0, 1, 1, 0 },
+    { 0, 1, 1, 1, 0, 1, 0, 0 },
+    { 0, 0, 0, 1, 0, 0, 0, 1 }
+  };
+
+  Fase fase2;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase2.fase[i][j] = mapa3fase2[i][j];
+    }
+  }
+
+  bool mapa3fase3[8][8] = {
+    { 0, 1, 1, 1, 1, 1, 0, 0 },
+    { 0, 0, 1, 0, 1, 0, 0, 1 },
+    { 1, 1, 0, 0, 1, 0, 1, 1 },
+    { 0, 0, 0, 1, 1, 0, 1, 1 },
+    { 0, 1, 0, 1, 1, 0, 0, 1 },
+    { 0, 1, 0, 1, 1, 1, 0, 1 },
+    { 1, 1, 0, 0, 0, 0, 0, 1 },
+    { 1, 1, 1, 1, 1, 1, 0, 0 }
+  };
+
+  Fase fase3;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase3.fase[i][j] = mapa3fase3[i][j];
+    }
+  }
+
+  bool mapa3fase4[8][8] = {
+    { 0, 1, 0, 0, 0, 0, 0, 0 },
+    { 0, 1, 0, 1, 0, 1, 0, 0 },
+    { 0, 0, 0, 1, 0, 1, 0, 1 },
+    { 0, 1, 1, 1, 0, 1, 0, 1 },
+    { 0, 1, 1, 0, 0, 1, 0, 1 },
+    { 1, 1, 0, 0, 1, 0, 0, 0 },
+    { 1, 0, 0, 1, 0, 0, 1, 1 },
+    { 0, 0, 1, 0, 0, 0, 0, 1 }
+  };
+
+  Fase fase4;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase4.fase[i][j] = mapa3fase4[i][j];
+    }
+  }
+  Coordenadas inicioVector2;
+  inicioVector2.x = 13;
+  inicioVector2.y = 2;
+
+  Coordenadas chaveVector2;
+  chaveVector2.x = 2;
+  chaveVector2.y = 2;
+
+  Coordenadas fimVector2;
+  fimVector2.x = 9;
+  fimVector2.y = 9;
+
+  mapaAtual.fases[0] = fase1;
+  mapaAtual.fases[1] = fase2;
+  mapaAtual.fases[2] = fase3;
+  mapaAtual.fases[3] = fase4;
+
+  mapaAtual.inicio = inicioVector2;
+  mapaAtual.chave = chaveVector2;
+  mapaAtual.fim = fimVector2;
+
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      mapaCompleto[i][j] = mapa3fase1[i][j];
+      mapaCompleto[i + 8][j] = mapa3fase2[i][j];
+      mapaCompleto[i + 8][j + 8] = mapa3fase3[i][j];
+      mapaCompleto[i][j + 8] = mapa3fase4[i][j];
+    }
+  }
+}
+
+void AtribuiMapa4() {
+  mapaAtualInt = 7;
+  bool mapa4fase1[8][8] = {
+    { 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 0, 1, 1, 0, 0, 1, 0, 1 },
+    { 0, 1, 0, 1, 1, 0, 0, 0 },
+    { 0, 1, 0, 0, 1, 1, 0, 0 },
+    { 0, 1, 0, 0, 0, 0, 1, 1 },
+    { 0, 0, 0, 1, 0, 0, 0, 1 },
+    { 0, 1, 0, 0, 1, 1, 0, 0 },
+    { 0, 0, 1, 0, 0, 0, 1, 1 }
+  };
+
+  Fase fase1;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase1.fase[i][j] = mapa4fase1[i][j];
+    }
+  }
+
+  bool mapa4fase2[8][8] = {
+    { 0, 0, 0, 1, 0, 1, 0, 1 },
+    { 0, 1, 0, 0, 1, 0, 0, 0 },
+    { 0, 0, 1, 0, 0, 0, 1, 0 },
+    { 1, 1, 0, 0, 1, 1, 1, 1 },
+    { 0, 1, 1, 0, 0, 0, 0, 1 },
+    { 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 0, 1, 1, 1, 1, 1, 0, 0 },
+    { 0, 0, 0, 0, 0, 1, 1, 0 }
+  };
+
+  Fase fase2;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase2.fase[i][j] = mapa4fase2[i][j];
+    }
+  }
+
+  bool mapa4fase3[8][8] = {
+    { 1, 0, 0, 1, 1, 0, 0, 0 },
+    { 1, 1, 0, 0, 1, 0, 1, 0 },
+    { 0, 1, 1, 0, 0, 1, 0, 0 },
+    { 0, 0, 1, 1, 0, 0, 1, 1 },
+    { 1, 0, 0, 1, 1, 0, 0, 1 },
+    { 1, 1, 0, 0, 1, 1, 0, 0 },
+    { 0, 1, 1, 0, 1, 0, 1, 0 },
+    { 0, 0, 1, 0, 1, 0, 0, 0 }
+  };
+
+  Fase fase3;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase3.fase[i][j] = mapa4fase3[i][j];
+    }
+  }
+
+  bool mapa4fase4[8][8] = {
+    { 0, 1, 0, 1, 0, 0, 0, 0 },
+    { 0, 0, 1, 0, 1, 0, 1, 0 },
+    { 1, 0, 0, 0, 0, 0, 1, 1 },
+    { 0, 1, 1, 1, 0, 0, 1, 0 },
+    { 0, 0, 0, 0, 1, 0, 0, 0 },
+    { 1, 0, 1, 0, 0, 1, 1, 1 },
+    { 0, 1, 0, 0, 1, 0, 0, 0 },
+    { 0, 0, 1, 0, 0, 0, 1, 1 }
+  };
+
+  Fase fase4;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase4.fase[i][j] = mapa4fase4[i][j];
+    }
+  }
+  Coordenadas inicioVector2;
+  inicioVector2.x = 15;
+  inicioVector2.y = 4;
+
+  Coordenadas chaveVector2;
+  chaveVector2.x = 14;
+  chaveVector2.y = 11;
+
+  Coordenadas fimVector2;
+  fimVector2.x = 14;
+  fimVector2.y = 13;
+
+  mapaAtual.fases[0] = fase1;
+  mapaAtual.fases[1] = fase2;
+  mapaAtual.fases[2] = fase3;
+  mapaAtual.fases[3] = fase4;
+
+  mapaAtual.inicio = inicioVector2;
+  mapaAtual.chave = chaveVector2;
+  mapaAtual.fim = fimVector2;
+
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      mapaCompleto[i][j] = mapa4fase1[i][j];
+      mapaCompleto[i + 8][j] = mapa4fase2[i][j];
+      mapaCompleto[i + 8][j + 8] = mapa4fase3[i][j];
+      mapaCompleto[i][j + 8] = mapa4fase4[i][j];
+    }
+  }
+}
+
+void AtribuiMapa5() {
+  mapaAtualInt = 8;
+  bool mapa5fase1[8][8] = {
+    { 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 0, 1, 1, 1, 1, 1, 1, 1 },
+    { 0, 1, 0, 0, 0, 0, 0, 0 },
+    { 0, 1, 0, 1, 0, 1, 1, 1 },
+    { 0, 1, 0, 1, 0, 0, 0, 0 },
+    { 0, 1, 0, 1, 0, 0, 1, 1 },
+    { 0, 1, 0, 1, 0, 0, 1, 0 },
+    { 0, 1, 0, 1, 0, 0, 1, 0 }
+  };
+
+  Fase fase1;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase1.fase[i][j] = mapa5fase1[i][j];
+    }
+  }
+
+  bool mapa5fase2[8][8] = {
+    { 0, 1, 0, 1, 0, 0, 1, 0 },
+    { 0, 1, 0, 1, 0, 0, 1, 0 },
+    { 0, 1, 0, 1, 0, 0, 1, 0 },
+    { 0, 1, 0, 1, 0, 0, 0, 0 },
+    { 0, 1, 0, 1, 1, 1, 1, 1 },
+    { 0, 1, 0, 0, 0, 0, 0, 0 },
+    { 0, 1, 1, 1, 1, 1, 1, 1 },
+    { 0, 0, 0, 0, 0, 0, 0, 0 }
+  };
+
+  Fase fase2;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase2.fase[i][j] = mapa5fase2[i][j];
+    }
+  }
+
+  bool mapa5fase3[8][8] = {
+    { 0, 1, 0, 0, 1, 0, 1, 0 },
+    { 1, 0, 0, 0, 1, 0, 1, 0 },
+    { 1, 0, 0, 0, 1, 0, 1, 0 },
+    { 0, 0, 0, 0, 1, 0, 1, 0 },
+    { 1, 1, 1, 1, 1, 0, 1, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 1, 1, 1, 1, 1, 1, 1, 0 },
+    { 0, 0, 0, 0, 0, 0, 0, 0 }
+  };
+
+  Fase fase3;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase3.fase[i][j] = mapa5fase3[i][j];
+    }
+  }
+
+  bool mapa5fase4[8][8] = {
+    { 0, 0, 0, 0, 0, 0, 0, 0 },
+    { 1, 1, 1, 1, 1, 1, 1, 0 },
+    { 0, 0, 0, 0, 0, 0, 1, 0 },
+    { 1, 1, 1, 1, 1, 0, 1, 0 },
+    { 0, 0, 0, 0, 1, 0, 1, 0 },
+    { 1, 1, 0, 0, 1, 0, 1, 0 },
+    { 0, 1, 0, 0, 1, 0, 1, 0 },
+    { 1, 1, 0, 0, 1, 0, 1, 0 }
+  };
+
+  Fase fase4;
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      fase4.fase[i][j] = mapa5fase4[i][j];
+    }
+  }
+  Coordenadas inicioVector2;
+  inicioVector2.x = 1;
+  inicioVector2.y = 0;
+
+  Coordenadas chaveVector2;
+  chaveVector2.x = 9;
+  chaveVector2.y = 9;
+
+  Coordenadas fimVector2;
+  fimVector2.x = 13;
+  fimVector2.y = 14;
+
+  mapaAtual.fases[0] = fase1;
+  mapaAtual.fases[1] = fase2;
+  mapaAtual.fases[2] = fase3;
+  mapaAtual.fases[3] = fase4;
+
+  mapaAtual.inicio = inicioVector2;
+  mapaAtual.chave = chaveVector2;
+  mapaAtual.fim = fimVector2;
+
+  for (int i = 0; i < 8; i++) {
+    for (int j = 0; j < 8; j++) {
+      mapaCompleto[i][j] = mapa5fase1[i][j];
+      mapaCompleto[i + 8][j] = mapa5fase2[i][j];
+      mapaCompleto[i + 8][j + 8] = mapa5fase3[i][j];
+      mapaCompleto[i][j + 8] = mapa5fase4[i][j];
+    }
+  }
+}
+
+//*****************************************************
+//
+// JOGO DA COBRA
+//
+//*****************************************************
+
+int randomNumber(int inclusiveMin, int inclusiveMax) {
+  randomSeed(millis());
+  return random(inclusiveMin, inclusiveMax + 1);
+}
+
+void enqueue(Coordenadas insertItem) {
+  if (Rear == QUEUESIZE - 1) {
+    Serial.println("Overflow \n");
+    for (int i = 0; i < 10; i++) {
+      //////////////////////////////////////
+      //FlashLedVermelho();
+    }
+  } else {
+    if (Front == -1)
+
+      Front = 0;
+    Rear = Rear + 1;
+    queue[Rear] = insertItem;
+  }
+}
+
+Coordenadas dequeue() {
+  if (Front == -1 || Front > Rear) {
+    Serial.println("Underflow \n");
+    for (int i = 0; i < 10; i++) {
+      //////////////////////////////////////
+      //FlashLedVermelho();
+    }
+  } else {
+    Coordenadas elementoRemovido = queue[Front];
+    Front = Front + 1;
+    return elementoRemovido;
+  }
+}
+
+void DesenhaCoordenadas(Coordenadas pixel, bool active) {
+  int x = pixel.x;
+  int y = pixel.y;
+  if (x >= 8) {
+    x -= 8;
+  }
+
+  if (y >= 8) {
+    y -= 8;
+  }
+  int faseDesenhar = GetFaseAtual(pixel);
+  switch (faseDesenhar) {
+    case 0:
+      matrix0.writePixel(x, y, active);
+      matrix0.display();
+      break;
+    case 1:
+      matrix1.writePixel(x, y, active);
+      matrix1.display();
+      break;
+    case 2:
+      matrix2.writePixel(x, y, active);
+      matrix2.display();
+      break;
+    case 3:
+      matrix3.writePixel(x, y, active);
+      matrix3.display();
+      break;
+  }
+}
+
+void StartJogoCobra() {
+  delay(300);
+  jogadorCoordenadas.x = randomNumber(0, 15);
+  jogadorCoordenadas.y = randomNumber(0, 15);
+
+  delay(300);
+  frutaCoordenadas.x = randomNumber(0, 15);
+  frutaCoordenadas.y = randomNumber(0, 15);
+
+  enqueue(jogadorCoordenadas);
+
+  DesenhaCoordenadas(jogadorCoordenadas, true);
+  DesenhaCoordenadas(frutaCoordenadas, true);
+
+  Serial.println(jogadorCoordenadas.x);
+  Serial.println(jogadorCoordenadas.y);
+  Serial.println(frutaCoordenadas.x);
+  Serial.println(frutaCoordenadas.y);
+  // while handle movement
+}
+
+void TaskUpdateJogoCobra(void *pvParameters) {
+
+  StartJogoCobra();
+  int dir;
+  int direcaoAtual = -1;
+  bool isGameOver = false;
+  
+  while(direcaoAtual == -1){
+    direcaoAtual = TrataFisicas();
+  }
+  dir = direcaoAtual;
+  while (1) {
+    direcaoAtual = TrataFisicas();
+    
+    if (direcaoAtual != -1) {
+      dir=direcaoAtual;
+    }
+
+    switch (dir)
+	  {
+	  case 0:
+		  jogadorCoordenadas.y++;
+		  if(jogadorCoordenadas.y>15){
+			  isGameOver=true;
+		  }
+		  break;
+	  case 1:
+		  jogadorCoordenadas.y--;
+		  if(jogadorCoordenadas.y<0){
+			  isGameOver=true;
+		  }
+		  break;
+	  case 2:
+		  jogadorCoordenadas.x--;
+		  if(jogadorCoordenadas.x<0){
+			  isGameOver=true;
+		  }
+		  break;
+	  case 3:
+		  jogadorCoordenadas.x++;
+		  if(jogadorCoordenadas.x>15){
+			  isGameOver=true;
+		  }
+		  break;
+	  }
+
+	  isGameOver |= BateuEmSiMesmo();
+
+	  if(isGameOver){
+	  	GameOver();
+	  	return;
+	  }
+
+    enqueue(jogadorCoordenadas);
+
+    bool apanhouFruta = (jogadorCoordenadas.x == frutaCoordenadas.x && jogadorCoordenadas.y == frutaCoordenadas.y);
+    if (apanhouFruta) {
+      //////////////////////////////////////
+      //FlashLedVerde();
+      RerollFruta();
+      DesenhaCobra();
+      DesenhaCoordenadas(frutaCoordenadas, true);
+    } else {
+      DesenhaCobra();
+      DesenhaCoordenadas(dequeue(), false);
+    }
+
+    vTaskDelay(1);
+  }
+}
+
+void RerollFruta() {
+  do {
+    frutaCoordenadas.x = randomNumber(0, 15);
+    frutaCoordenadas.y = randomNumber(0, 15);
+  } while (frutaCoordenadas.x == jogadorCoordenadas.x && frutaCoordenadas.y == jogadorCoordenadas.y);
+}
+
+void DesenhaCobra() {
+  for (int i = Front; i <= Rear; i++) {
+    Coordenadas pixel = queue[i];
+    int x = pixel.x;
+    int y = pixel.y;
+    if (x >= 8) {
+      x -= 8;
+    }
+
+    if (y >= 8) {
+      y -= 8;
+    }
+    int faseDesenhar = GetFaseAtual(pixel);
+    switch (faseDesenhar) {
+      case 0:
+        matrix0.writePixel(x, y, true);
+        break;
+      case 1:
+        matrix1.writePixel(x, y, true);
+        break;
+      case 2:
+        matrix2.writePixel(x, y, true);
+        break;
+      case 3:
+        matrix3.writePixel(x, y, true);
+        break;
+    }
+  }
+  matrix0.display();
+  matrix1.display();
+  matrix2.display();
+  matrix3.display();
+}
+
+bool BateuEmSiMesmo() {
+  for (int i = Front; i <= Rear; i++) {
+    Coordenadas corpoCobra = queue[i];
+    if (jogadorCoordenadas.x == corpoCobra.x && jogadorCoordenadas.y == corpoCobra.y) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void GameOver() {
+  //jogoON = false;
+  ClearMatrixTotal();
+  ClearOLED();
+  WriteOLED(2,0,0,"PERDESTE :(");
+  DisplayOLED();
+  delay(5000);
+  ESP.restart();
+}
